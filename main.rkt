@@ -20,16 +20,24 @@
 ;; See the current version of the racket style guide here:
 ;; http://docs.racket-lang.org/style/index.html
 
-(require txexpr pollen/tag pollen/setup)
+(require txexpr pollen/tag pollen/setup rackunit)
 (provide (all-defined-out))
 
-;; p feature
+;; utilities
 
-(define (p . elements)
+(define (get-attr x xs) (cadr (assq x xs)))
+
+;; p feature
+;; no attributes needed
+;; md/txt: blank line before & after
+;; html enclose content in <p></p> tags
+;; ltx/pdf: no special markup
+
+(define-tag-function (p attributes elements)
   (case (current-poly-target)
-    [(txt) elements]
-    [(html) (apply string-append `("<p>" ,@elements "</p>"))]
-    [(pdf ltx) (apply string-append `(,@elements))]
+    [(txt md) (apply string-append `(,@elements))]
+    [(html) `(p ,@elements)]
+    [(pdf ltx) (apply string-append `(,@elements "\\newline"))]
     [else (txexpr 'p empty elements)]
     )
   )
@@ -41,7 +49,7 @@
   (case (current-poly-target)
     [(txt) "----------------------------------------"]
     [(html) "<hr>"]
-    [(pdf ltx) "\\noindent\\makebox[\\linewidth]{\\rule{12cm}{0.4pt}}"]
+    [(pdf ltx) "\noindent\\makebox[\\linewidth]{\\rule{12cm}{0.4pt}}"]
     [else (txexpr 'hrule empty empty)]
     ))
 
@@ -58,49 +66,95 @@
 
 ;; litem (list item) feature
 
-(define (litem . elements)
+(define-tag-function (litem attributes elements)
   (case (current-poly-target)
-    [(txt) (apply string-append elements)]
-    [(html) (apply string-append `("<li>" ,@elements "</li>"))]
+    [(txt) (apply string-append `(,@elements))]
+    [(html) `(li ,@elements)]
     [(pdf ltx) (apply string-append `("\\item " ,@elements))]
     [else (txexpr 'litem empty elements)]))
 
 ;; list feature
 
-(define (tlist . elements)
+(define tlist-ltx-tag
+  (hash
+   'ul "itemize"
+   'ol "enumerate"
+   )
+  )
+
+(define (leave-irrelevant xs)
+  (filter (lambda (x) (not(equal? x "\n"))) xs)
+  )
+
+(define (ol-elems->txt elements)
+  (define xs (leave-irrelevant elements))
+  (for/list ([x xs]
+             [i (in-naturals 1)])
+    (string-append (number->string i) ". " x "\n")))
+
+(define (ul-elems->txt elements)
+  (define xs (leave-irrelevant elements))
+  (for/list ([x xs])
+    (string-append " * " x "\n")
+    )
+  )
+
+(define (elems->txt ordering elements)
+  (case ordering
+    [(ul) (ul-elems->txt elements)]
+    [(ol) (ol-elems->txt elements)]
+    [else elements]
+    )
+  )
+
+(define-tag-function (tlist attributes elements)
+  (define ordering (string->symbol (get-attr 'ordering attributes)))
+  (define ltx-ordering (hash-ref tlist-ltx-tag ordering))
   (case (current-poly-target)
-    [(txt) (string-append (for/list ([e elements]) (string-append e "\n")))]
-    [(html) (apply string-append `("<ul>" ,@elements "</ul>"))]
+    [(txt md) (elems->txt ordering elements)]
+    [(html) `(,ordering ,@elements)]
     [(ltx pdf)
      (apply string-append
-      `("\\begin{enumerate}\n"
-      ,@elements
-      "\\end{enumerate}\n"))]
+            `("\\begin{" ,ltx-ordering "}"
+                         ,@elements
+                         "\\end{" ,ltx-ordering "}"))]
     (else (txexpr 'list empty elements))))
 
 ;; box feature
 
 (define-tag-function (tbox attrs elements)
-  (define label (cadr (assq 'label attrs)))
-  (define label-string (if label (string-append "\\textbf{" label "}\n\n") ""))
+  (define label (get-attr 'label attrs))
+  (define label-string (if label (string-append "\\textbf{" label "}\\newline") ""))
   (case (current-poly-target)
     [(txt) elements]
     [(pdf ltx)
      (apply string-append
-      `("\\fbox{\n"
-      "\\begin{minipage}{\\textwidth}\n"
+      `("\\fbox{\\newline"
+      "\\begin{minipage}{\\textwidth}\\newline"
       ,label-string
       ,@elements
-      "\n\\end{minipage}}\n"))]
+      "\\end{minipage}}\\newline"))]
     [else `(box ,@attrs ,@elements)]))
 
 ;; heading feature
 
 (define-tag-function (heading attrs elements)
+  (define h-level (cadr (assq 'level attrs)))
+  (define h-tag (string->symbol (format "h~a" h-level)))
+  (define heading-commands
+    (hash
+     1 "\\chapter"
+     2 "\\section"
+     3 "\\subsection"
+     4 "\\subsubsection"
+     5 "\\paragraph"
+     6 "\\subparagraph")
+    )
+  (define h-ltx (hash-ref heading-commands h-level))
   (case (current-poly-target)
     [(txt) `(heading ,@elements)]
-    [(html) `(heading ,@elements)]
-    [(pdf ltx) (apply string-append `("\n\\large{" ,@elements "}\n"))]
+    [(html) `(,h-tag ,@elements)]
+    [(pdf ltx) (apply string-append `(,h-ltx "{" ,@elements "}"))]
     [else `(heading ,@attrs ,@elements)]
     )
   )
